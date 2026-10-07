@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { createRoot } from 'react-dom/client';
 import { Player } from '@remotion/player';
 import { Analytics } from '@vercel/analytics/react';
+import { SpeedInsights } from '@vercel/speed-insights/react';
 import { buildRoute, makeOptions, store, multiplier, rnd } from './logic.js';
 import './styles.css';
 import { RunComp, RevealComp, FPS, runDuration, revealDuration, frameToDist } from './compositions.jsx';
@@ -490,4 +491,4 @@ function App() {
   );
 }
 
-createRoot(document.getElementById('root')).render(<><App /><Analytics /></>);
+createRoot(document.getElementById('root')).render(<><App /><Analytics /><SpeedInsights /></>);
