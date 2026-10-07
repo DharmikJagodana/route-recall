@@ -15,6 +15,16 @@ Built with React and [Remotion](https://www.remotion.dev/): every round is a Rem
 
 Three wrong answers end the run.
 
+### Daily route
+
+One route sequence for everyone, every day. The route, answer options and terrain are generated from a seeded RNG keyed to the date (`src/logic.js` `withSeed`), so two players on the same day face the identical puzzle and their scores are directly comparable. A daily streak counts consecutive days played. From the game-over screen you can:
+
+- **Share result** — a spoiler-free summary (🟩/🟥 trace, score, streak) via the Web Share API, with a clipboard fallback.
+- **Share image** — a branded score card rendered on a `<canvas>` and shared as a PNG (or downloaded).
+- **Challenge a friend** — a `?seed=` (or `?daily=`) link that drops anyone into the exact same route to beat your score.
+
+Opening the site with `?daily=YYYY-MM-DD` or `?seed=<key>` starts that specific route immediately.
+
 ### Career
 
 Six stages, each adding a twist: Trail, Forest (crossroads, 4 options), Night (dense fog), Turning map (the map rotates with the runner), Surges (uneven speed) and Retrace (build the route yourself). Reaching a stage unlocks it as a starting point.
@@ -58,7 +68,9 @@ src/main.jsx            app shell: menus, career/custom modes, questions, scorin
 src/compositions.jsx    Remotion compositions: the run and the reveal
 src/logic.js            route generator, answer options, terrain, speed profile
 src/styles.css          orienteering-map theme, light/dark, responsive layout
+scripts/make-og.mjs     regenerates public/og.png (the social share image) — `npm run og`
 public/favicon.svg
+public/og.png           1200x630 Open Graph / Twitter card image
 vercel.json             Vercel build settings and asset caching
 ```
 

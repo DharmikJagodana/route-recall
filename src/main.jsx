@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { Player } from '@remotion/player';
 import { Analytics } from '@vercel/analytics/react';
 import { SpeedInsights } from '@vercel/speed-insights/react';
-import { buildRoute, makeOptions, store, multiplier, rnd } from './logic.js';
+import { buildRoute, makeOptions, store, multiplier, rnd, withSeed } from './logic.js';
 import './styles.css';
 import { RunComp, RevealComp, FPS, runDuration, revealDuration, frameToDist } from './compositions.jsx';
 
@@ -52,6 +52,17 @@ const twistTags = cfg => [
   cfg.camera === 'turn' && 'Turning map', cfg.camera === 'bird' && 'Bird’s-eye', cfg.uneven && 'Surges',
   cfg.answer === 'build' && 'Build the route', cfg.answer === 'one' && 'One junction'
 ].filter(Boolean);
+
+// ---------- daily route (same puzzle for everyone, seeded by the date) ----------
+// derive the base URL at runtime so share links work on prod, previews and localhost alike
+const SITE = typeof window !== 'undefined' ? window.location.origin : '';
+const DAY0 = Date.UTC(2026, 9, 7) / 864e5; // day #1 = 2026-10-07
+const pad2 = n => String(n).padStart(2, '0');
+const todayKey = () => { const d = new Date(); return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; };
+const dailyNumber = key => { const [y, m, d] = key.split('-').map(Number); return Math.round(Date.UTC(y, m - 1, d) / 864e5 - DAY0) + 1; };
+const prevKey = key => { const [y, m, d] = key.split('-').map(Number); const t = new Date(Date.UTC(y, m - 1, d) - 864e5); return `${t.getUTCFullYear()}-${pad2(t.getUTCMonth() + 1)}-${pad2(t.getUTCDate())}`; };
+// the Daily run reuses career's escalating twists at a fixed pace, so difficulty is identical for all players
+const dailyCfg = round => careerCfg(round, 'jog');
 
 // ---------- small components ----------
 const WORD = { L: 'left', R: 'right', S: 'straight' };
@@ -111,8 +122,10 @@ function App() {
   const [maxLevel, setMaxLevel] = useState(() => store.get('routeRecall.maxLevel', 1));
   const [startStage, setStartStage] = useState(0);
   const [custom, setCustom] = useState(() => ({ ...DEFAULT_CUSTOM, ...store.get('routeRecall.custom', {}) }));
-  const [bests, setBests] = useState(() => store.get('routeRecall.bests', { career: store.get('routeRecall.best', 0), custom: 0 }));
-  const [s, setS] = useState({ mode: 'career', level: 1, round: 1, score: 0, lives: 3, streak: 0 });
+  const [bests, setBests] = useState(() => ({ career: store.get('routeRecall.best', 0), custom: 0, daily: 0, ...store.get('routeRecall.bests', {}) }));
+  const [daily, setDaily] = useState(() => store.get('routeRecall.dailyStreak', { last: '', streak: 0 }));
+  const [shareMsg, setShareMsg] = useState('');
+  const [s, setS] = useState({ mode: 'career', level: 1, round: 1, score: 0, lives: 3, streak: 0, seed: null, hist: [] });
   const [round, setRound] = useState(null);
   const [demo, setDemo] = useState(() => buildRoute(8, true));
   const [result, setResult] = useState(null);
@@ -147,28 +160,43 @@ function App() {
     return () => ro.disconnect();
   }, [phase]);
 
-  const cfgFor = useCallback((st) => st.mode === 'career' ? careerCfg(st.level, pace) : customCfg(custom, st.round), [pace, custom]);
+  const cfgFor = useCallback((st) => st.mode === 'career' ? careerCfg(st.level, pace) : st.mode === 'daily' ? dailyCfg(st.round) : customCfg(custom, st.round), [pace, custom]);
 
   const beginRound = useCallback((st) => {
     const cfg = cfgFor(st);
-    const route = buildRoute(cfg.turns, cfg.branchAll);
-    const n = route.decisions.length;
-    setRound({
-      key: route.id, route, cfg,
-      opts: cfg.answer === 'pick' ? makeOptions(route.decisions, cfg.options, st.mode === 'career' ? st.level : Math.max(1, cfg.turns - 2)) : null,
-      oneIdx: cfg.answer === 'one' ? rnd(0, n - 1) : null
-    });
+    // build the route, answer options and target junction together so one seed reproduces the whole puzzle
+    const make = () => {
+      const route = buildRoute(cfg.turns, cfg.branchAll);
+      const n = route.decisions.length;
+      const level = st.mode === 'career' ? st.level : st.mode === 'daily' ? st.round : Math.max(1, cfg.turns - 2);
+      return {
+        key: route.id, route, cfg,
+        opts: cfg.answer === 'pick' ? makeOptions(route.decisions, cfg.options, level) : null,
+        oneIdx: cfg.answer === 'one' ? rnd(0, n - 1) : null
+      };
+    };
+    setRound(st.seed ? withSeed(`${st.seed}#${st.round}`, make) : make());
     setResult(null); setBuilt([]); setPassed(0);
-    // show a stage card when a career run enters a new stage
-    const showIntro = st.mode === 'career' && (st.round === 1 || STAGES.some(x => x.from === st.level));
+    // show a stage card when a career/daily run enters a new stage
+    const showIntro = (st.mode === 'career' && (st.round === 1 || STAGES.some(x => x.from === st.level)))
+      || (st.mode === 'daily' && (st.round === 1 || STAGES.some(x => x.from === st.round)));
     setPhase(showIntro ? 'intro' : 'run');
   }, [cfgFor]);
 
-  const startGame = (mode) => {
+  const startGame = (mode, seed = null) => {
     const level = mode === 'career' ? STAGES[startStage].from : 1;
-    const st = { mode, level, round: 1, score: 0, lives: 3, streak: 0 };
-    setS(st); setNewBest(false); beginRound(st);
+    const st = { mode, level, round: 1, score: 0, lives: 3, streak: 0, seed, hist: [] };
+    setS(st); setNewBest(false); setShareMsg(''); beginRound(st);
   };
+
+  // a shared link (?daily=YYYY-MM-DD or ?seed=key) drops the player straight into that exact route
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search);
+    const d = p.get('daily'), seed = p.get('seed');
+    if (d) startGame('daily', /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : todayKey());
+    else if (seed) startGame('daily', seed);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     const p = runRef.current;
@@ -209,7 +237,10 @@ function App() {
     const pts = right ? Math.round(truth.length * 20 * multiplier(round.cfg)) + (streak - 1) * 15 : 0;
     const ns = {
       ...s, streak, score: s.score + pts, lives: right ? s.lives : s.lives - 1,
-      level: right ? s.level + 1 : s.level, round: right ? s.round + 1 : s.round
+      level: right ? s.level + 1 : s.level,
+      // daily advances to the next route on every answer so all players see the same ordered sequence
+      round: (s.mode === 'daily' || right) ? s.round + 1 : s.round,
+      hist: [...s.hist, right]
     };
     setS(ns);
     if (ns.mode === 'career' && ns.level > maxLevel) { setMaxLevel(ns.level); store.set('routeRecall.maxLevel', ns.level); }
@@ -226,12 +257,115 @@ function App() {
       const nb = { ...bests, [key]: s.score };
       setBests(nb); store.set('routeRecall.bests', nb); setNewBest(s.score > 0);
     }
+    // count a daily streak only for today's real Daily (not a shared challenge link)
+    if (s.mode === 'daily' && s.seed === todayKey() && daily.last !== s.seed) {
+      const nd = { last: s.seed, streak: daily.last === prevKey(s.seed) ? daily.streak + 1 : 1 };
+      setDaily(nd); store.set('routeRecall.dailyStreak', nd);
+    }
     setDemo(buildRoute(8, true));
     setPhase('over');
-  }, [phase, s, bests, beginRound]);
+  }, [phase, s, bests, daily, beginRound]);
 
   const toMenu = () => { setDemo(buildRoute(8, true)); setPhase('menu'); };
   const updCustom = (k, v) => setCustom(c => { const n = { ...c, [k]: v }; store.set('routeRecall.custom', n); return n; });
+
+  // ---------- sharing ----------
+  const isDailyToday = s.mode === 'daily' && s.seed === todayKey();
+  const runTitle = () => s.mode === 'daily'
+    ? (isDailyToday ? `Daily #${dailyNumber(s.seed)}` : 'Challenge')
+    : s.mode === 'career' ? 'Career' : 'Custom run';
+  const shareLink = () => {
+    if (s.mode !== 'daily' || !s.seed) return SITE;
+    return `${SITE}/?${isDailyToday ? 'daily' : 'seed'}=${encodeURIComponent(s.seed)}`;
+  };
+  const shareText = () => {
+    const cleared = s.hist.filter(Boolean).length;
+    const grid = s.hist.map(r => (r ? '🟩' : '🟥')).join('');
+    const lines = [
+      `Route Recall · ${runTitle()}`,
+      `${cleared} route${cleared === 1 ? '' : 's'} recalled · ${s.score.toLocaleString()} pts`,
+      grid
+    ];
+    if (isDailyToday && daily.streak > 1) lines.push(`${daily.streak} day streak 🔥`);
+    return lines.join('\n');
+  };
+  const copy = async (payload, ok) => {
+    try { await navigator.clipboard.writeText(payload); setShareMsg(ok); }
+    catch (e) { setShareMsg('Could not copy — select and copy manually'); }
+  };
+  const doShare = async () => {
+    const text = shareText(), url = shareLink();
+    try { if (navigator.share) { await navigator.share({ title: 'Route Recall', text, url }); setShareMsg('Shared'); return; } }
+    catch (e) { if (e && e.name === 'AbortError') return; }
+    copy(`${text}\n${url}`, 'Result copied to clipboard');
+  };
+  const challenge = async () => {
+    const base = s.seed || ('c' + Math.random().toString(36).slice(2, 8));
+    const url = isDailyToday ? `${SITE}/?daily=${encodeURIComponent(base)}` : `${SITE}/?seed=${encodeURIComponent(base)}`;
+    const text = s.seed ? `I recalled this route for ${s.score.toLocaleString()} pts. Beat me:` : 'Can you recall this route? Beat my score:';
+    try { if (navigator.share) { await navigator.share({ title: 'Route Recall', text, url }); return; } }
+    catch (e) { if (e && e.name === 'AbortError') return; }
+    copy(url, 'Challenge link copied');
+  };
+  const drawCard = () => new Promise(resolve => {
+    const W = 1200, H = 630, c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    const x = c.getContext('2d');
+    const C = { ink: '#ECEAE0', muted: '#A9A79C', pink: '#EA6ABD', ok: '#5CC47F', bad: '#F06A5E' };
+    x.fillStyle = '#141B17'; x.fillRect(0, 0, W, H);
+    // decorative route line in the brand overprint, bottom-right
+    x.strokeStyle = C.pink; x.globalAlpha = 0.22; x.lineWidth = 10; x.lineJoin = 'round'; x.lineCap = 'round';
+    x.beginPath();
+    const pts = [[760, 560], [760, 430], [900, 430], [900, 300], [1040, 300], [1040, 170], [1150, 170]];
+    pts.forEach((p, i) => (i ? x.lineTo(p[0], p[1]) : x.moveTo(p[0], p[1])));
+    x.stroke();
+    pts.forEach(p => { x.beginPath(); x.arc(p[0], p[1], 9, 0, 7); x.fillStyle = C.pink; x.fill(); });
+    x.globalAlpha = 1;
+    const disp = "'Barlow Condensed', 'Arial Narrow', Arial, sans-serif";
+    const body = "'Barlow', Arial, sans-serif";
+    // brand mark + wordmark
+    x.strokeStyle = C.pink; x.lineWidth = 6; x.lineJoin = 'round';
+    x.beginPath(); x.moveTo(90, 108); x.lineTo(130, 150); x.lineTo(50, 150); x.closePath(); x.stroke();
+    x.fillStyle = C.ink; x.font = `700 48px ${disp}`; x.textBaseline = 'alphabetic';
+    x.fillText('ROUTE RECALL', 150, 148);
+    // kicker
+    x.fillStyle = C.pink; x.font = `700 40px ${disp}`;
+    x.fillText(runTitle().toUpperCase(), 90, 250);
+    // big score
+    x.fillStyle = C.ink; x.font = `700 200px ${disp}`;
+    x.fillText(s.score.toLocaleString(), 86, 430);
+    const cleared = s.hist.filter(Boolean).length;
+    x.fillStyle = C.muted; x.font = `500 34px ${body}`;
+    x.fillText(`points  ·  ${cleared} route${cleared === 1 ? '' : 's'} recalled${isDailyToday && daily.streak > 1 ? `  ·  ${daily.streak} day streak` : ''}`, 90, 480);
+    // result trace as squares
+    const sq = 34, gap = 10, max = Math.min(s.hist.length, 20), startX = 90, rowY = 528;
+    for (let i = 0; i < max; i++) {
+      x.fillStyle = s.hist[i] ? C.ok : C.bad;
+      const rx = startX + i * (sq + gap);
+      x.beginPath(); x.roundRect(rx, rowY, sq, sq, 7); x.fill();
+    }
+    // footer url
+    x.fillStyle = C.muted; x.font = `600 30px ${body}`;
+    x.fillText(window.location.host, 90, 600);
+    c.toBlob(b => resolve(b), 'image/png');
+  });
+  const shareImage = async () => {
+    setShareMsg('Rendering image…');
+    try { if (document.fonts && document.fonts.ready) await document.fonts.ready; } catch (e) {}
+    let blob; try { blob = await drawCard(); } catch (e) { blob = null; }
+    if (!blob) { setShareMsg('Could not render image'); return; }
+    const file = new File([blob], 'route-recall.png', { type: 'image/png' });
+    try {
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: 'Route Recall', text: `${shareText()}\n${shareLink()}` });
+        setShareMsg('Shared'); return;
+      }
+    } catch (e) { if (e && e.name === 'AbortError') return; }
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'route-recall.png';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    setShareMsg('Image saved — attach it to your post');
+  };
 
   const n = round ? round.route.decisions.length : 0;
   const addArrow = useCallback(d => setBuilt(b => b.length < n ? [...b, d] : b), [n]);
@@ -315,6 +449,18 @@ function App() {
             <div className="panel menu">
               <h1>Route Recall</h1>
               <p>A runner sets off through the forest. Watch which way they go at every junction, then tell us the route they took.</p>
+              <button className="daily-card" onClick={() => startGame('daily', todayKey())}>
+                <div className="daily-main">
+                  <span className="daily-kicker">Daily route #{dailyNumber(todayKey())}</span>
+                  <b>Play today’s route</b>
+                  <small>The same route for everyone, today only. Share your score.</small>
+                </div>
+                <span className="daily-side">
+                  {daily.streak > 0 && <span className="daily-streak">🔥 {daily.streak}</span>}
+                  {bests.daily > 0 && <span className="daily-best">Best {bests.daily.toLocaleString()}</span>}
+                  <span className="daily-go" aria-hidden="true">▶</span>
+                </span>
+              </button>
               <div className="tabs" role="tablist">
                 <button role="tab" aria-selected={tab === 'career'} onClick={() => setTab('career')}>Career</button>
                 <button role="tab" aria-selected={tab === 'custom'} onClick={() => setTab('custom')}>Custom run</button>
@@ -465,15 +611,27 @@ function App() {
         {phase === 'over' && (
           <section className="overlay">
             <div className="panel" role="dialog" aria-labelledby="overTitle">
-              <h2 id="overTitle">Run over</h2>
-              <p>{newBest ? <span className="newbest">New best score.</span> : 'Three wrong routes. A slower pace or clearer vision helps build a streak.'}</p>
+              <p className="kicker">{s.mode === 'daily' ? runTitle() : 'Run over'}</p>
+              <h2 id="overTitle">{newBest ? 'New best score' : 'Run over'}</h2>
+              {s.hist.length > 0 && (
+                <div className="trace" aria-label={`${s.hist.filter(Boolean).length} of ${s.hist.length} routes recalled`}>
+                  {s.hist.map((r, i) => <i key={i} className={r ? 'hit' : 'miss'} />)}
+                </div>
+              )}
               <div className="stat-grid">
-                <div><span>Score</span><b>{s.score}</b></div>
-                <div><span>{s.mode === 'career' ? 'Level reached' : 'Rounds'}</span><b>{s.mode === 'career' ? s.level : s.round}</b></div>
-                <div><span>Best</span><b>{bests[s.mode] || 0}</b></div>
+                <div><span>Score</span><b>{s.score.toLocaleString()}</b></div>
+                <div><span>Recalled</span><b>{s.hist.filter(Boolean).length}</b></div>
+                <div><span>Best</span><b>{(bests[s.mode] || 0).toLocaleString()}</b></div>
               </div>
+              {isDailyToday && daily.streak > 1 && <p className="small">🔥 {daily.streak} day streak — come back tomorrow to keep it.</p>}
+              <div className="share-row">
+                <button className="btn" ref={focusRef} onClick={doShare}>Share result</button>
+                <button className="btn ghost" onClick={shareImage}>Share image</button>
+                <button className="btn ghost" onClick={challenge}>Challenge a friend</button>
+              </div>
+              {shareMsg && <p className="small share-msg" role="status">{shareMsg}</p>}
               <div className="row">
-                <button className="btn" ref={focusRef} onClick={() => startGame(s.mode)}>Run again</button>
+                <button className="btn" onClick={() => startGame(s.mode, s.seed)}>Run again</button>
                 <button className="btn ghost" onClick={toMenu}>Menu</button>
               </div>
             </div>

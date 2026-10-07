@@ -170,6 +170,28 @@ input[type=range]{width:100%;accent-color:var(--overprint);height:28px}
 .stat-grid b{font-family:var(--display);font-size:clamp(24px,5vw,30px)}
 .newbest{color:var(--overprint);font-weight:600}
 
+/* daily route card on the menu */
+.daily-card{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;text-align:left;cursor:pointer;margin:4px 0 6px;padding:14px 16px;border:2px solid var(--overprint);border-radius:4px;background:color-mix(in srgb,var(--overprint) 8%,var(--panel))}
+.daily-card:hover{background:color-mix(in srgb,var(--overprint) 14%,var(--panel))}
+.daily-main{display:flex;flex-direction:column;gap:2px;min-width:0}
+.daily-kicker{font-size:13px;font-weight:700;color:var(--overprint);text-transform:uppercase;letter-spacing:.03em}
+.daily-main b{font-family:var(--display);font-weight:700;font-size:clamp(22px,4vw,28px);line-height:1.05}
+.daily-main small{color:var(--muted);font-size:13px}
+.daily-side{display:flex;align-items:center;gap:10px;flex:none}
+.daily-streak{font-weight:700}
+.daily-best{font-size:13px;color:var(--muted);white-space:nowrap}
+.daily-go{color:var(--overprint);font-size:18px}
+
+/* result trace (one square per route this run) */
+.trace{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 14px}
+.trace i{width:20px;height:20px;border-radius:5px;background:var(--ok)}
+.trace i.miss{background:var(--bad)}
+
+/* share buttons on the game-over panel */
+.share-row{display:flex;gap:10px;flex-wrap:wrap;margin:2px 0 10px}
+.share-row .btn{font-size:17px;padding:8px 14px;min-height:40px}
+.share-msg{color:var(--ok);font-weight:600;margin:0 0 12px}
+
 /* phones: panels become full-height sheets */
 @media (max-width:560px){
   .brand-name{display:none}

@@ -1,5 +1,30 @@
-export const rnd = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
-export const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+// seedable randomness: all random draws below go through _rand so that a date
+// or a shared key can reproduce the exact same route for everyone (Daily / challenge links).
+export function hashString(str) {
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return h >>> 0;
+}
+export function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+let _rand = Math.random;
+export const rand = () => _rand();
+// run fn with a deterministic RNG derived from `seed`, then restore the normal one
+export function withSeed(seed, fn) {
+  const prev = _rand;
+  _rand = mulberry32(hashString(String(seed)));
+  try { return fn(); } finally { _rand = prev; }
+}
+
+export const rnd = (a, b) => a + Math.floor(rand() * (b - a + 1));
+export const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(rand() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 export const store = {
   get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
@@ -9,7 +34,7 @@ export const DX = [0, 1, 0, -1], DY = [-1, 0, 1, 0];
 const turnH = (h, d) => d === 'L' ? (h + 3) % 4 : d === 'R' ? (h + 1) % 4 : h;
 
 function pickOrder() {
-  const r = Math.random();
+  const r = rand();
   const first = r < 0.38 ? 'L' : r < 0.76 ? 'R' : 'S';
   return [first, ...shuffle(['L', 'R', 'S'].filter(c => c !== first))];
 }
@@ -48,7 +73,7 @@ function tryGen(turns, branchAll) {
       if (!seg) continue;
       const placed = [];
       for (const alt of shuffle(['L', 'R', 'S'].filter(c => c !== dch))) {
-        if (!branchAll && placed.length && Math.random() < 0.45) continue;
+        if (!branchAll && placed.length && rand() < 0.45) continue;
         const bh = turnH(h, alt);
         const b = lay(x, y, bh, 2) || lay(x, y, bh, 1);
         if (b) placed.push({ x1: x, y1: y, x2: b.x, y2: b.y, h: bh });
@@ -76,9 +101,9 @@ function mutate(seq, times) {
   for (let t = 0; t < times; t++) {
     const idx = [];
     for (let i = 0; i < s.length - 1; i++) if (s[i] !== s[i + 1]) idx.push(i);
-    if (Math.random() < 0.55 || !idx.length) {
+    if (rand() < 0.55 || !idx.length) {
       const i = rnd(0, s.length - 1);
-      s[i] = s[i] === 'L' ? 'R' : s[i] === 'R' ? 'L' : (Math.random() < 0.5 ? 'L' : 'R');
+      s[i] = s[i] === 'L' ? 'R' : s[i] === 'R' ? 'L' : (rand() < 0.5 ? 'L' : 'R');
     } else {
       const i = idx[rnd(0, idx.length - 1)];
       [s[i], s[i + 1]] = [s[i + 1], s[i]];
@@ -94,7 +119,7 @@ export function makeOptions(truth, n, level) {
   let guard = 0;
   while (opts.length < n && guard++ < 600) {
     let s;
-    if (level <= 2 && opts.length === n - 1 && Math.random() < 0.5) s = truth.map(() => 'LRS'[rnd(0, 2)]);
+    if (level <= 2 && opts.length === n - 1 && rand() < 0.5) s = truth.map(() => 'LRS'[rnd(0, 2)]);
     else s = mutate(truth, level >= 6 ? 1 : rnd(1, 2));
     if (!seen.has(key(s))) { seen.add(key(s)); opts.push(s); }
   }
@@ -140,7 +165,7 @@ const f = n => n.toFixed(3);
 function blobD(cx, cy, r, jag) {
   const N = 12, p = [];
   for (let i = 0; i < N; i++) {
-    const a = i / N * Math.PI * 2, rr = r * (1 + (Math.random() - 0.5) * jag * 2);
+    const a = i / N * Math.PI * 2, rr = r * (1 + (rand() - 0.5) * jag * 2);
     p.push({ x: cx + Math.cos(a) * rr, y: cy + Math.sin(a) * rr });
   }
   const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
@@ -155,14 +180,14 @@ function makeTerrain(bb) {
   const t = { open: [], veg: [], water: [], contours: [], north: [], bb };
   const n = Math.round(area / 8);
   for (let i = 0; i < n; i++) {
-    const r0 = Math.random();
+    const r0 = rand();
     const type = r0 < 0.42 ? 'open' : r0 < 0.9 ? 'veg' : 'water';
-    const r = type === 'water' ? 0.45 + Math.random() * 0.75 : 0.8 + Math.random() * 2.1;
-    t[type].push(blobD(bb.x + Math.random() * bb.w, bb.y + Math.random() * bb.h, r, type === 'water' ? 0.18 : 0.32));
+    const r = type === 'water' ? 0.45 + rand() * 0.75 : 0.8 + rand() * 2.1;
+    t[type].push(blobD(bb.x + rand() * bb.w, bb.y + rand() * bb.h, r, type === 'water' ? 0.18 : 0.32));
   }
   const hills = Math.round(area / 45) + 2;
   for (let i = 0; i < hills; i++) {
-    const cx = bb.x + Math.random() * bb.w, cy = bb.y + Math.random() * bb.h, rings = rnd(2, 4);
+    const cx = bb.x + rand() * bb.w, cy = bb.y + rand() * bb.h, rings = rnd(2, 4);
     for (let k = 1; k <= rings; k++) t.contours.push(blobD(cx, cy, 0.7 + k * 0.75, 0.16));
   }
   for (let x = Math.ceil(bb.x / 4) * 4 + 0.5; x < bb.x + bb.w; x += 4) t.north.push(x);
